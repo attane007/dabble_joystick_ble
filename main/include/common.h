@@ -30,7 +30,7 @@
 #include "nimble/nimble_port_freertos.h"
 
 /* Defines */
-#define TAG "NimBLE_Connection"
-#define DEVICE_NAME "NimBLE_CONN"
+#define TAG "Fame_BLE_Connection"
+#define DEVICE_NAME "Fame_Racing_BLE"
 
 #endif // COMMON_H
