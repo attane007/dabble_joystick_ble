@@ -17,6 +17,7 @@
 #include "gap.h"
 #include "led.h"
 #include "gatt_svc.h"
+#include "motors.h"
 
 // ลบ TAG ออกถ้าใน common.h มีประกาศไว้แล้ว เพื่อเลี่ยง warning redefined
 // #define TAG "DABBLE_ESP32" 
@@ -59,6 +60,46 @@ static uint16_t prev_btn_group = 0;
 static int8_t prev_axis_x = 0;
 static int8_t prev_axis_y = 0;
 
+#define JOYSTICK_DEADBAND 6
+
+static int16_t clamp_i16(int16_t value, int16_t min_value, int16_t max_value) {
+    if (value < min_value) {
+        return min_value;
+    }
+    if (value > max_value) {
+        return max_value;
+    }
+    return value;
+}
+
+static int16_t axis_to_duty(int16_t axis) {
+    axis = clamp_i16(axis, -127, 127);
+    return (int16_t)((axis * MOTORS_MAX_DUTY) / 127);
+}
+
+static void apply_joystick(int8_t axis_x, int8_t axis_y) {
+    int16_t x = axis_x;
+    int16_t y = axis_y;
+
+    if (x > -JOYSTICK_DEADBAND && x < JOYSTICK_DEADBAND) {
+        x = 0;
+    }
+    if (y > -JOYSTICK_DEADBAND && y < JOYSTICK_DEADBAND) {
+        y = 0;
+    }
+
+    int16_t left = clamp_i16(y + x, -127, 127);
+    int16_t right = clamp_i16(y - x, -127, 127);
+
+    int16_t left_duty = axis_to_duty(left);
+    int16_t right_duty = axis_to_duty(right);
+
+    motors_set_speed(0, left_duty);
+    motors_set_speed(1, left_duty);
+    motors_set_speed(2, right_duty);
+    motors_set_speed(3, right_duty);
+}
+
 static int gatt_svr_dabble_access(uint16_t conn_handle, uint16_t attr_handle,
                                  struct ble_gatt_access_ctxt *ctxt, void *arg) 
 {
@@ -73,7 +114,7 @@ static int gatt_svr_dabble_access(uint16_t conn_handle, uint16_t attr_handle,
         printf("\n");
 
         // ตรวจสอบ Header สำหรับ Gamepad (Module 02)
-        if (len >= 7 && data[0] == 0xFF && data[4] == 0x02) {
+        if (len >= 8 && data[0] == 0xFF && data[4] == 0x02) {
             
             // --- 1. ส่วนของปุ่มกด (Start, Select, Triangle, Circle, Cross, Square) ---
             uint8_t current_btns = data[5];
@@ -104,15 +145,25 @@ static int gatt_svr_dabble_access(uint16_t conn_handle, uint16_t attr_handle,
             if (axis_x != prev_axis_x || axis_y != prev_axis_y) {
                 // ถ้าเป็นโหมด Digital (ค่าจะเป็น 1, 2, 4, 8)
                 if (len == 8 && axis_y == 0) { 
+                    int8_t mapped_x = 0;
+                    int8_t mapped_y = 0;
                     if (axis_x == 0x01) ESP_LOGI(TAG, "Direction: UP");
                     else if (axis_x == 0x02) ESP_LOGI(TAG, "Direction: DOWN");
                     else if (axis_x == 0x04) ESP_LOGI(TAG, "Direction: LEFT");
                     else if (axis_x == 0x08) ESP_LOGI(TAG, "Direction: RIGHT");
                     else if (axis_x == 0x00) ESP_LOGI(TAG, "Direction: CENTER/RELEASED");
+
+                    if (axis_x == 0x01) mapped_y = 127;
+                    else if (axis_x == 0x02) mapped_y = -127;
+                    else if (axis_x == 0x04) mapped_x = -127;
+                    else if (axis_x == 0x08) mapped_x = 127;
+
+                    apply_joystick(mapped_x, mapped_y);
                 } 
                 // ถ้าเป็นโหมด Joystick หรือ Accelerometer (ค่าจะแปรผันต่อเนื่อง)
                 else {
                     ESP_LOGI(TAG, "Control Axis -> X: %d, Y: %d", axis_x, axis_y);
+                    apply_joystick(axis_x, axis_y);
                 }
 
                 prev_axis_x = axis_x;
@@ -149,6 +200,14 @@ void app_main(void) {
     ESP_ERROR_CHECK(ret);
 
     led_init();
+
+    ret = motors_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Motor init failed: %d", ret);
+    } else {
+        motors_enable(true);
+        motors_stop_all();
+    }
 
     ret = nimble_port_init();
     if (ret != ESP_OK) {

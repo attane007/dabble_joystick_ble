@@ -16,5 +16,6 @@
     "--query-driver=**",
     "--compile-commands-dir=d:\\espressifproj\\ble\\build"
   ],
-  "idf.flashType": "UART"
+  "idf.flashType": "UART",
+  "idf.currentSetup": "d:\\espressif\\framework\\v5.5.2\\esp-idf"
 }
