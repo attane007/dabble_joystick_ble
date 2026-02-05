@@ -60,6 +60,20 @@ static uint16_t prev_btn_group = 0;
 static int8_t prev_axis_x = 0;
 static int8_t prev_axis_y = 0;
 
+// ระบบเกียร์ 5 ระดับ (0=หยุด, 1-4=ช้า-เร็ว)
+static uint8_t current_gear = 2; // เริ่มที่เกียร์ 2 (กลาง ๆ)
+#define MAX_GEAR 4
+#define MIN_GEAR 1
+
+// ตัวคูณความเร็วของแต่ละเกียร์ (เปอร์เซ็นต์)
+static const float gear_multiplier[] = {
+    0.00f,  // เกียร์ 0: หยุด
+    0.30f,  // เกียร์ 1: 30% (ช้ามาก)
+    0.50f,  // เกียร์ 2: 50% (กลาง)
+    0.75f,  // เกียร์ 3: 75% (เร็ว)
+    1.00f   // เกียร์ 4: 100% (เต็มสปีด)
+};
+
 #define JOYSTICK_DEADBAND 6
 
 static int16_t clamp_i16(int16_t value, int16_t min_value, int16_t max_value) {
@@ -74,7 +88,9 @@ static int16_t clamp_i16(int16_t value, int16_t min_value, int16_t max_value) {
 
 static int16_t axis_to_duty(int16_t axis) {
     axis = clamp_i16(axis, -127, 127);
-    return (int16_t)((axis * MOTORS_MAX_DUTY) / 127);
+    // คำนวณ duty และคูณด้วยตัวคูณของเกียร์ปัจจุบัน
+    int16_t base_duty = (int16_t)((axis * MOTORS_MAX_DUTY) / 127);
+    return (int16_t)(base_duty * gear_multiplier[current_gear]);
 }
 
 static void apply_joystick(int8_t axis_x, int8_t axis_y) {
@@ -123,12 +139,39 @@ static int gatt_svr_dabble_access(uint16_t conn_handle, uint16_t attr_handle,
                 uint8_t released = ~current_btns & prev_btn_group;
 
                 if (pressed) {
-                    if (pressed & 0x01) ESP_LOGI(TAG, "Button: START (Pressed)");
+                    // บุ่ม START: หยุดฉุกเฉิน (เกียร์ 0)
+                    if (pressed & 0x01) {
+                        current_gear = 0;
+                        motors_stop_all();
+                        led_set_gear_color(current_gear);
+                        ESP_LOGW(TAG, "⛔ EMERGENCY STOP - เกียร์ 0 (หยุด)");
+                    }
+                    
                     if (pressed & 0x02) ESP_LOGI(TAG, "Button: SELECT (Pressed)");
-                    if (pressed & 0x04) ESP_LOGI(TAG, "Button: TRIANGLE (Pressed)");
-                    if (pressed & 0x08) ESP_LOGI(TAG, "Button: CIRCLE (Pressed)");
+                    
+                    // ปุ่ม CIRCLE: เพิ่มเกียร์
+                    if (pressed & 0x08) {
+                        if (current_gear < MAX_GEAR) {
+                            current_gear++;
+                            led_set_gear_color(current_gear);
+                            ESP_LOGI(TAG, "⬆️ GEAR UP → เกียร์ %d (%.0f%%)", current_gear, gear_multiplier[current_gear] * 100);
+                        } else {
+                            ESP_LOGI(TAG, "⚠️ เกียร์สูงสุดแล้ว (เกียร์ %d)", current_gear);
+                        }
+                    }
+                    
                     if (pressed & 0x10) ESP_LOGI(TAG, "Button: CROSS (Pressed)");
-                    if (pressed & 0x20) ESP_LOGI(TAG, "Button: SQUARE (Pressed)");
+                    
+                    // ปุ่ม SQUARE: ลดเกียร์
+                    if (pressed & 0x20) {
+                        if (current_gear > MIN_GEAR) {
+                            current_gear--;
+                            led_set_gear_color(current_gear);
+                            ESP_LOGI(TAG, "⬇️ GEAR DOWN → เกียร์ %d (%.0f%%)", current_gear, gear_multiplier[current_gear] * 100);
+                        } else {
+                            ESP_LOGI(TAG, "⚠️ เกียร์ต่ำสุดแล้ว (เกียร์ %d)", current_gear);
+                        }
+                    }
                 }
                 if (released) {
                     if (released & 0x01) ESP_LOGI(TAG, "Button: START (Released)");
@@ -207,6 +250,8 @@ void app_main(void) {
     } else {
         motors_enable(true);
         motors_stop_all();
+        led_set_gear_color(current_gear); // ตั้งสี LED เริ่มต้น
+        ESP_LOGI(TAG, "🏎️ Motor System Ready - เกียร์เริ่มต้น: %d (%.0f%%)", current_gear, gear_multiplier[current_gear] * 100);
     }
 
     ret = nimble_port_init();

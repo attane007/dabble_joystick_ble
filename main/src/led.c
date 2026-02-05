@@ -38,6 +38,37 @@ void led_off(void) {
     led_state = false;
 }
 
+void led_set_gear_color(uint8_t gear) {
+    /* กำหนดสีตามเกียร์ (RGB 0-255) */
+    uint8_t r, g, b;
+    
+    switch(gear) {
+        case 0: // หยุด - แดงสด
+            r = 255; g = 0; b = 0;
+            break;
+        case 1: // 30% - ส้ม/เหลือง
+            r = 255; g = 120; b = 0;
+            break;
+        case 2: // 50% - เขียว
+            r = 0; g = 255; b = 0;
+            break;
+        case 3: // 75% - ฟ้า/สีน้ำเงินอ่อน
+            r = 0; g = 150; b = 255;
+            break;
+        case 4: // 100% - ม่วง
+            r = 128; g = 0; b = 255;
+            break;
+        default:
+            r = 255; g = 255; b = 255; // ขาว (default)
+            break;
+    }
+    
+    /* ตั้งค่าสี LED */
+    led_strip_set_pixel(led_strip, 0, r, g, b);
+    led_strip_refresh(led_strip);
+    led_state = true;
+}
+
 void led_init(void) {
     ESP_LOGI(TAG, "example configured to blink addressable led!");
     /* LED strip initialization with the GPIO and pixels number*/
@@ -77,6 +108,11 @@ void led_init(void) {
     gpio_reset_pin(CONFIG_BLINK_GPIO);
     /* Set the GPIO as a push/pull output */
     gpio_set_direction(CONFIG_BLINK_GPIO, GPIO_MODE_OUTPUT);
+
+void led_set_gear_color(uint8_t gear) {
+    // สำหรับ GPIO LED ธรรมดา ไม่สามารถเปลี่ยนสีได้ - เพียงกระพริบตามเกียร์
+    (void)gear; // ไม่ได้ใช้งานใน GPIO mode
+}
 }
 
 #else

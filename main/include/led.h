@@ -20,5 +20,6 @@ uint8_t get_led_state(void);
 void led_on(void);
 void led_off(void);
 void led_init(void);
+void led_set_gear_color(uint8_t gear); // เปลี่ยนสี LED ตามเกียร์
 
 #endif // LED_H
