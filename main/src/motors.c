@@ -12,27 +12,27 @@ static const char *TAG = "MOTORS";
 #define MOTOR_SPEED_MODE LEDC_LOW_SPEED_MODE
 #define MOTOR_TIMER LEDC_TIMER_0
 
-#define MOTOR_STBY_GPIO -1
+#define MOTOR_STBY_GPIO 7 // พิน STBY สำหรับ TB6612FNG ทั้ง 2 ตัว (ใช้ร่วมกัน)
 
 static const int motor_pwm_gpio[MOTORS_COUNT] = {
-    -1, // Motor 0 PWM pin
-    -1, // Motor 1 PWM pin
-    -1, // Motor 2 PWM pin
-    -1  // Motor 3 PWM pin
+    4, // Motor 0 PWM pin (TB6612 #1 ซ้าย - PWMA/B ร่วมกัน)
+    4, // Motor 1 PWM pin (TB6612 #1 ซ้าย - PWMA/B ร่วมกัน)
+    8, // Motor 2 PWM pin (TB6612 #2 ขวา - PWMA/B ร่วมกัน)
+    8  // Motor 3 PWM pin (TB6612 #2 ขวา - PWMA/B ร่วมกัน)
 };
 
 static const int motor_in1_gpio[MOTORS_COUNT] = {
-    -1, // Motor 0 IN1 pin
-    -1, // Motor 1 IN1 pin
-    -1, // Motor 2 IN1 pin
-    -1  // Motor 3 IN1 pin
+    5, // Motor 0 IN1 pin (TB6612 #1 ซ้าย - AIN1/BIN1 ร่วมกัน)
+    5, // Motor 1 IN1 pin (TB6612 #1 ซ้าย - AIN1/BIN1 ร่วมกัน)
+    9, // Motor 2 IN1 pin (TB6612 #2 ขวา - AIN1/BIN1 ร่วมกัน)
+    9  // Motor 3 IN1 pin (TB6612 #2 ขวา - AIN1/BIN1 ร่วมกัน)
 };
 
 static const int motor_in2_gpio[MOTORS_COUNT] = {
-    -1, // Motor 0 IN2 pin
-    -1, // Motor 1 IN2 pin
-    -1, // Motor 2 IN2 pin
-    -1  // Motor 3 IN2 pin
+    6, // Motor 0 IN2 pin (TB6612 #1 ซ้าย - AIN2/BIN2 ร่วมกัน)
+    6, // Motor 1 IN2 pin (TB6612 #1 ซ้าย - AIN2/BIN2 ร่วมกัน)
+    10, // Motor 2 IN2 pin (TB6612 #2 ขวา - AIN2/BIN2 ร่วมกัน)
+    10  // Motor 3 IN2 pin (TB6612 #2 ขวา - AIN2/BIN2 ร่วมกัน)
 };
 
 static const ledc_channel_t motor_ledc_channel[MOTORS_COUNT] = {
