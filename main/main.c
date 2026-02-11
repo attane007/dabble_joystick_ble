@@ -60,21 +60,20 @@ static uint16_t prev_btn_group = 0;
 static int8_t prev_axis_x = 0;
 static int8_t prev_axis_y = 0;
 
-// ระบบเกียร์ 5 ระดับ (0=หยุด, 1-4=ช้า-เร็ว)
-static uint8_t current_gear = 2; // เริ่มที่เกียร์ 2 (กลาง ๆ)
-#define MAX_GEAR 4
+// ระบบเกียร์ 3 ระดับ (0=หยุด, 1-2=ต่ำ-สูง)
+static uint8_t current_gear = 1; // เริ่มที่เกียร์ 1 (ต่ำ)
+#define MAX_GEAR 2
 #define MIN_GEAR 1
 
 // ตัวคูณความเร็วของแต่ละเกียร์ (เปอร์เซ็นต์)
 static const float gear_multiplier[] = {
     0.00f,  // เกียร์ 0: หยุด
-    0.30f,  // เกียร์ 1: 30% (ช้ามาก)
-    0.50f,  // เกียร์ 2: 50% (กลาง)
-    0.75f,  // เกียร์ 3: 75% (เร็ว)
-    1.00f   // เกียร์ 4: 100% (เต็มสปีด)
+    0.50f,  // เกียร์ 1: 50% (ต่ำ)
+    1.00f   // เกียร์ 2: 100% (สูง)
 };
 
 #define JOYSTICK_DEADBAND 6
+#define MOTORS_MIN_DUTY (int16_t)(MOTORS_MAX_DUTY * 0.40f)  // 40% minimum PWM for motor stall torque
 
 static int16_t clamp_i16(int16_t value, int16_t min_value, int16_t max_value) {
     if (value < min_value) {
@@ -90,7 +89,16 @@ static int16_t axis_to_duty(int16_t axis) {
     axis = clamp_i16(axis, -127, 127);
     // คำนวณ duty และคูณด้วยตัวคูณของเกียร์ปัจจุบัน
     int16_t base_duty = (int16_t)((axis * MOTORS_MAX_DUTY) / 127);
-    return (int16_t)(base_duty * gear_multiplier[current_gear]);
+    int16_t final_duty = (int16_t)(base_duty * gear_multiplier[current_gear]);
+    
+    // Apply PWM minimum threshold: ถ้ามอเตอร์กำลังหมุน ต้องมีพลังขั้นต่ำ
+    if (final_duty > 0 && final_duty < MOTORS_MIN_DUTY) {
+        final_duty = MOTORS_MIN_DUTY;
+    } else if (final_duty < 0 && final_duty > -MOTORS_MIN_DUTY) {
+        final_duty = -MOTORS_MIN_DUTY;
+    }
+    
+    return final_duty;
 }
 
 static void apply_joystick(int8_t axis_x, int8_t axis_y) {
@@ -129,17 +137,17 @@ static int gatt_svr_dabble_access(uint16_t conn_handle, uint16_t attr_handle,
         for(int i=0; i<len; i++) printf("%02X ", data[i]);
         printf("\n");
 
-        // ตรวจสอบ Header สำหรับ Gamepad (Module 02)
+        // ตรวจสอบ Header สำหรับ Gamepad (Module 02) - Digital Mode
         if (len >= 8 && data[0] == 0xFF && data[4] == 0x02) {
             
-            // --- 1. ส่วนของปุ่มกด (Start, Select, Triangle, Circle, Cross, Square) ---
+            // --- 1. ส่วนของปุ่มกด (Start, Select, Circle, Cross, Square) ---
             uint8_t current_btns = data[5];
             if (current_btns != prev_btn_group) {
                 uint8_t pressed = current_btns & ~prev_btn_group;
                 uint8_t released = ~current_btns & prev_btn_group;
 
                 if (pressed) {
-                    // บุ่ม START: หยุดฉุกเฉิน (เกียร์ 0)
+                    // ปุ่ม START: หยุดฉุกเฉิน (เกียร์ 0)
                     if (pressed & 0x01) {
                         current_gear = 0;
                         motors_stop_all();
@@ -147,9 +155,7 @@ static int gatt_svr_dabble_access(uint16_t conn_handle, uint16_t attr_handle,
                         ESP_LOGW(TAG, "⛔ EMERGENCY STOP - เกียร์ 0 (หยุด)");
                     }
                     
-                    if (pressed & 0x02) ESP_LOGI(TAG, "Button: SELECT (Pressed)");
-                    
-                    // ปุ่ม CIRCLE: เพิ่มเกียร์
+                    // ปุ่ม CIRCLE (bit 3): เพิ่มเกียร์
                     if (pressed & 0x08) {
                         if (current_gear < MAX_GEAR) {
                             current_gear++;
@@ -160,9 +166,7 @@ static int gatt_svr_dabble_access(uint16_t conn_handle, uint16_t attr_handle,
                         }
                     }
                     
-                    if (pressed & 0x10) ESP_LOGI(TAG, "Button: CROSS (Pressed)");
-                    
-                    // ปุ่ม SQUARE: ลดเกียร์
+                    // ปุ่ม SQUARE (bit 5): ลดเกียร์
                     if (pressed & 0x20) {
                         if (current_gear > MIN_GEAR) {
                             current_gear--;
@@ -173,11 +177,6 @@ static int gatt_svr_dabble_access(uint16_t conn_handle, uint16_t attr_handle,
                         }
                     }
                 }
-                if (released) {
-                    if (released & 0x01) ESP_LOGI(TAG, "Button: START (Released)");
-                    if (released & 0x02) ESP_LOGI(TAG, "Button: SELECT (Released)");
-                    // ... เพิ่ม Released ของปุ่มอื่นๆ ตามต้องการ
-                }
                 prev_btn_group = current_btns;
             }
 
@@ -186,29 +185,38 @@ static int gatt_svr_dabble_access(uint16_t conn_handle, uint16_t attr_handle,
             int8_t axis_y = (int8_t)data[7];
 
             if (axis_x != prev_axis_x || axis_y != prev_axis_y) {
-                // ถ้าเป็นโหมด Digital (ค่าจะเป็น 1, 2, 4, 8)
-                if (len == 8 && axis_y == 0) { 
-                    int8_t mapped_x = 0;
-                    int8_t mapped_y = 0;
-                    if (axis_x == 0x01) ESP_LOGI(TAG, "Direction: UP");
-                    else if (axis_x == 0x02) ESP_LOGI(TAG, "Direction: DOWN");
-                    else if (axis_x == 0x04) ESP_LOGI(TAG, "Direction: LEFT");
-                    else if (axis_x == 0x08) ESP_LOGI(TAG, "Direction: RIGHT");
-                    else if (axis_x == 0x00) ESP_LOGI(TAG, "Direction: CENTER/RELEASED");
-
-                    if (axis_x == 0x01) mapped_y = 127;
-                    else if (axis_x == 0x02) mapped_y = -127;
-                    else if (axis_x == 0x04) mapped_x = -127;
-                    else if (axis_x == 0x08) mapped_x = 127;
-
-                    apply_joystick(mapped_x, mapped_y);
-                } 
-                // ถ้าเป็นโหมด Joystick หรือ Accelerometer (ค่าจะแปรผันต่อเนื่อง)
-                else {
-                    ESP_LOGI(TAG, "Control Axis -> X: %d, Y: %d", axis_x, axis_y);
-                    apply_joystick(axis_x, axis_y);
+                // โหมด Digital Buttons (ค่าแกน = 0x01, 0x02, 0x04, 0x08)
+                int8_t mapped_x = 0;
+                int8_t mapped_y = 0;
+                
+                // Direction UP (0x01)
+                if (axis_x == 0x01) {
+                    mapped_y = 127;
+                    ESP_LOGI(TAG, "🔼 Direction: UP");
+                }
+                // Direction DOWN (0x02)
+                else if (axis_x == 0x02) {
+                    mapped_y = -127;
+                    ESP_LOGI(TAG, "🔽 Direction: DOWN");
+                }
+                // Direction LEFT (0x04)
+                else if (axis_x == 0x04) {
+                    mapped_x = -127;
+                    ESP_LOGI(TAG, "◀️ Direction: LEFT");
+                }
+                // Direction RIGHT (0x08)
+                else if (axis_x == 0x08) {
+                    mapped_x = 127;
+                    ESP_LOGI(TAG, "▶️ Direction: RIGHT");
+                }
+                // Released (0x00)
+                else if (axis_x == 0x00) {
+                    mapped_x = 0;
+                    mapped_y = 0;
+                    ESP_LOGI(TAG, "⏹️ Direction: CENTER/RELEASED");
                 }
 
+                apply_joystick(mapped_x, mapped_y);
                 prev_axis_x = axis_x;
                 prev_axis_y = axis_y;
             }
