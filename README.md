@@ -4,8 +4,8 @@
 # Dabble Joystick BLE — ESP32-S3 Robot Controller
 
 คำอธิบายสั้น ๆ (ไทย / EN):
-- โครงการนี้ใช้ ESP-IDF + NimBLE เพื่อรับคำสั่งจากแอพ *Dabble* (Gamepad module) และควบคุมมอเตอร์ผ่านไดรเวอร์ TB6612FNG สองตัว (ล้อซ้าย/ขวา)
-- This project uses ESP-IDF + NimBLE to receive Dabble Gamepad input and drive two TB6612FNG motor drivers (left/right wheels).
+- โครงการนี้ใช้ ESP-IDF + NimBLE เพื่อรับคำสั่งจากแอพ *Dabble* (Gamepad module) และควบคุมมอเตอร์ 4 ตัวผ่าน TB6612FNG หนึ่งตัว (ซ้าย 2 ตัว / ขวา 2 ตัวแบบจับคู่)
+- This project uses ESP-IDF + NimBLE to receive Dabble Gamepad input and drive 4 motors with one TB6612FNG driver (paired as left 2 / right 2).
 
 **ไฟล์สำคัญ**:
 - Source: [main/main.c](main/main.c#L1-L30)
@@ -21,43 +21,38 @@
 - Joystick บังคับทิศทาง (analog หรือ digital)
 - ปุ่ม: Circle = เพิ่มเกียร์, Square = ลดเกียร์, START = หยุดฉุกเฉิน (gear 0)
 - ระบบเกียร์ 3 ระดับ (0=หยุด, 1-2=ต่ำ-สูง) เพื่อจำกัดความเร็ว (0=หยุด, 1=50%, 2=100%)
-- ควบคุมมอเตอร์ 4 แชนเนล (2 แชนเนลต่อไดรเวอร์ TB6612FNG) โดยใช้ LEDC PWM
+- ควบคุมมอเตอร์ 4 ตัวแบบจับคู่เป็น 2 กลุ่ม (ซ้าย/ขวา) ผ่าน TB6612FNG 2 แชนเนล โดยใช้ LEDC PWM
 - LED RGB เปลี่ยนสีตามเกียร์ (ถ้าใช้ LED strip backend), หากเป็น GPIO LED จะกระพริบแบบ fallback
 
 ---
 
 ## ผังการต่อ (Wiring)
 
-ต่อ ESP32-S3 กับ TB6612FNG สองตัว ตามนี้ (TB6612FNG #1 = ล้อซ้าย, #2 = ล้อขวา):
+ต่อ ESP32-S3 กับ TB6612FNG **หนึ่งตัว** ตามนี้:
 
-- TB6612FNG #1 (ล้อซ้าย):
-  - PWMA → ESP32 GPIO 4    # PWM Left (PWMA)
-  - AIN1 → ESP32 GPIO 5    # IN1 for channel A (direction)
-  - AIN2 → ESP32 GPIO 6    # IN2 for channel A (direction)
-  - PWMB → ESP32 GPIO 4    # (ใช้ PWM ร่วมกันสำหรับทั้ง A/B ในการออกแบบนี้)
-  - BIN1 → ESP32 GPIO 5
-  - BIN2 → ESP32 GPIO 6
-  - STBY  → ESP32 GPIO 7    # STBY (ใช้ร่วมทั้งสองตัว)
-  - VCC   → 3.3V
-  - GND   → GND
-  - VM    → Battery +
+- TB6612FNG Channel A (กลุ่มมอเตอร์ซ้าย 2 ตัวต่อขนาน):
+  - PWMA → ESP32 GPIO 4
+  - AIN1 → ESP32 GPIO 5
+  - AIN2 → ESP32 GPIO 6
+  - AO1/AO2 → มอเตอร์ซ้าย 2 ตัว (ต่อขนานตามขั้วเดียวกัน)
 
-- TB6612FNG #2 (ล้อขวา):
-  - PWMA → ESP32 GPIO 8    # PWM Right (PWMA)
-  - AIN1 → ESP32 GPIO 9
-  - AIN2 → ESP32 GPIO 10
+- TB6612FNG Channel B (กลุ่มมอเตอร์ขวา 2 ตัวต่อขนาน):
   - PWMB → ESP32 GPIO 8
   - BIN1 → ESP32 GPIO 9
   - BIN2 → ESP32 GPIO 10
-  - STBY  → ESP32 GPIO 7    # เชื่อมกับ TB6612FNG #1 STBY
-  - VCC   → 3.3V
-  - GND   → GND
-  - VM    → Battery +
+  - BO1/BO2 → มอเตอร์ขวา 2 ตัว (ต่อขนานตามขั้วเดียวกัน)
 
-หมายเหตุ: ในโค้ด `motors.c` เราแม็ปให้:
-- motor_pwm_gpio = {4, 4, 8, 8}
-- motor_in1_gpio = {5, 5, 9, 9}
-- motor_in2_gpio = {6, 6, 10, 10}
+- Shared power/control:
+  - STBY → ESP32 GPIO 7
+  - VCC  → 3.3V
+  - GND  → GND (ร่วมกับ ESP32 และแบต)
+  - VM   → Battery +
+
+หมายเหตุ: ในโค้ด `motors.c` มีการแม็ปแบบ logical/physical ดังนี้:
+- Logical motors: 0,1 = กลุ่มซ้าย และ 2,3 = กลุ่มขวา
+- Physical GPIO groups:
+  - Left group: PWM=4, IN1=5, IN2=6
+  - Right group: PWM=8, IN1=9, IN2=10
 - MOTOR_STBY_GPIO = 7
 
 ---
@@ -65,7 +60,7 @@
 ## การควบคุม (Controls)
 
 - Joystick: บังคับทิศทาง (X/Y)
-- Circle: เพิ่มเกียร์ (ย้ายไปเกียร์ถัดไป สูงสุดเกียร์ 4)
+- Circle: เพิ่มเกียร์ (ย้ายไปเกียร์ถัดไป สูงสุดเกียร์ 2)
 - Square: ลดเกียร์ (ย้ายไปเกียร์ก่อนหน้า ต่ำสุดเกียร์ 1)
 - START: หยุดฉุกเฉิน (ตั้งเกียร์เป็น 0 และหยุดมอเตอร์)
 

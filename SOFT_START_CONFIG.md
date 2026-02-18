@@ -87,8 +87,8 @@ ESP_LOGI(TAG, "Motor %d: %d → %d (ramping)", motor_id, current, target);
 
 ## หมายเหตุสำคัญ
 
-1. **Shared PWM pins**: มอเตอร์ 0+1 และ 2+3 ใช้ PWM ร่วมกัน - การ ramp จะส่งผลต่อทั้งคู่พร้อมกัน
-2. **TB6612FNG limits**: ไดร์เวอร์มี current limit ~1.2A ต่อเนื่อง, 3.2A peak - ถ้ามอเตอร์ดึงเกินอาจร้อนหรือ shutdown
+1. **Paired motor groups**: มอเตอร์ 0+1 (ซ้าย) และ 2+3 (ขวา) ถูกควบคุมเป็นคู่ - การ ramp จะส่งผลต่อทั้งคู่พร้อมกัน
+2. **TB6612FNG limits**: ไดร์เวอร์มี current limit ~1.2A ต่อเนื่อง, 3.2A peak ต่อช่อง - เมื่อต่อมอเตอร์ 2 ตัวขนานในช่องเดียว ต้องรวมกระแส stall ไม่ให้เกินพิกัด
 3. **การตอบสนอง Joystick**: ถ้ารู้สึกว่าควบคุมช้า ให้ลด `RAMP_DELAY_MS` หรือเพิ่ม `RAMP_STEP_SIZE`
 4. **Stop behavior**: การหยุดใช้ step size เป็น 2 เท่า (double) เพื่อเบรกเร็วขึ้น
 

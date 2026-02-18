@@ -1,6 +1,5 @@
 #include "motors.h"
 
-#include <string.h>
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -13,8 +12,9 @@ static const char *TAG = "MOTORS";
 #define MOTOR_PWM_RESOLUTION LEDC_TIMER_10_BIT
 #define MOTOR_SPEED_MODE LEDC_LOW_SPEED_MODE
 #define MOTOR_TIMER LEDC_TIMER_0
+#define MOTOR_GROUP_COUNT 2
 
-#define MOTOR_STBY_GPIO 7 // พิน STBY สำหรับ TB6612FNG ทั้ง 2 ตัว (ใช้ร่วมกัน)
+#define MOTOR_STBY_GPIO 7 // พิน STBY สำหรับ TB6612FNG (บอร์ดเดียว)
 
 // Soft-start configuration
 #define SOFT_START_ENABLED 1        // เปิด/ปิด soft-start (1=เปิด, 0=ปิด)
@@ -22,44 +22,51 @@ static const char *TAG = "MOTORS";
 #define RAMP_DELAY_MS 3             // ดีเลย์ระหว่าง step (ms) - ปรับตามความเร็วที่ต้องการ
 
 static const int motor_pwm_gpio[MOTORS_COUNT] = {
-    4, // Motor 0 PWM pin (TB6612 #1 ซ้าย - PWMA/B ร่วมกัน)
-    4, // Motor 1 PWM pin (TB6612 #1 ซ้าย - PWMA/B ร่วมกัน)
-    8, // Motor 2 PWM pin (TB6612 #2 ขวา - PWMA/B ร่วมกัน)
-    8  // Motor 3 PWM pin (TB6612 #2 ขวา - PWMA/B ร่วมกัน)
+    4, // Left group PWM pin (PWMA/B ร่วมกัน)
+    8  // Right group PWM pin (PWMA/B ร่วมกัน)
 };
 
-static const int motor_in1_gpio[MOTORS_COUNT] = {
-    5, // Motor 0 IN1 pin (TB6612 #1 ซ้าย - AIN1/BIN1 ร่วมกัน)
-    5, // Motor 1 IN1 pin (TB6612 #1 ซ้าย - AIN1/BIN1 ร่วมกัน)
-    9, // Motor 2 IN1 pin (TB6612 #2 ขวา - AIN1/BIN1 ร่วมกัน)
-    9  // Motor 3 IN1 pin (TB6612 #2 ขวา - AIN1/BIN1 ร่วมกัน)
+static const int motor_in1_gpio[MOTOR_GROUP_COUNT] = {
+    5, // Left group IN1 pin (AIN1/BIN1 ร่วมกัน)
+    9  // Right group IN1 pin (AIN1/BIN1 ร่วมกัน)
 };
 
-static const int motor_in2_gpio[MOTORS_COUNT] = {
-    6, // Motor 0 IN2 pin (TB6612 #1 ซ้าย - AIN2/BIN2 ร่วมกัน)
-    6, // Motor 1 IN2 pin (TB6612 #1 ซ้าย - AIN2/BIN2 ร่วมกัน)
-    10, // Motor 2 IN2 pin (TB6612 #2 ขวา - AIN2/BIN2 ร่วมกัน)
-    10  // Motor 3 IN2 pin (TB6612 #2 ขวา - AIN2/BIN2 ร่วมกัน)
+static const int motor_in2_gpio[MOTOR_GROUP_COUNT] = {
+    6,  // Left group IN2 pin (AIN2/BIN2 ร่วมกัน)
+    10  // Right group IN2 pin (AIN2/BIN2 ร่วมกัน)
 };
 
-static const ledc_channel_t motor_ledc_channel[MOTORS_COUNT] = {
+static const ledc_channel_t motor_ledc_channel[MOTOR_GROUP_COUNT] = {
     LEDC_CHANNEL_0,
-    LEDC_CHANNEL_1,
-    LEDC_CHANNEL_2,
-    LEDC_CHANNEL_3
+    LEDC_CHANNEL_1
 };
 
-// เก็บ duty ปัจจุบันของแต่ละมอเตอร์สำหรับ soft-start
-static int16_t current_motor_speed[MOTORS_COUNT] = {0, 0, 0, 0};
+// แผนที่ logical motor -> physical group (ซ้าย/ขวา)
+static const uint8_t motor_group_map[MOTORS_COUNT] = {
+    0, // Motor 0 -> Left group
+    0, // Motor 1 -> Left group
+    1, // Motor 2 -> Right group
+    1  // Motor 3 -> Right group
+};
+
+// เก็บ duty ปัจจุบันของแต่ละ physical group สำหรับ soft-start
+static int16_t current_group_speed[MOTOR_GROUP_COUNT] = {0, 0};
 
 static bool motors_ready = false;
 
 static bool pins_configured(void) {
-    for (int i = 0; i < MOTORS_COUNT; ++i) {
+    for (int i = 0; i < MOTOR_GROUP_COUNT; ++i) {
         if (motor_pwm_gpio[i] < 0 || motor_in1_gpio[i] < 0 || motor_in2_gpio[i] < 0) {
             return false;
         }
     }
+
+    for (int i = 0; i < MOTORS_COUNT; ++i) {
+        if (motor_group_map[i] >= MOTOR_GROUP_COUNT) {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -75,25 +82,25 @@ static esp_err_t configure_gpio_output(int gpio_num) {
     return gpio_config(&io_conf);
 }
 
-static void set_direction(uint8_t motor_id, int16_t speed) {
+static void set_direction(uint8_t group_id, int16_t speed) {
     if (speed > 0) {
-        gpio_set_level(motor_in1_gpio[motor_id], 1);
-        gpio_set_level(motor_in2_gpio[motor_id], 0);
+        gpio_set_level(motor_in1_gpio[group_id], 1);
+        gpio_set_level(motor_in2_gpio[group_id], 0);
     } else if (speed < 0) {
-        gpio_set_level(motor_in1_gpio[motor_id], 0);
-        gpio_set_level(motor_in2_gpio[motor_id], 1);
+        gpio_set_level(motor_in1_gpio[group_id], 0);
+        gpio_set_level(motor_in2_gpio[group_id], 1);
     } else {
-        gpio_set_level(motor_in1_gpio[motor_id], 0);
-        gpio_set_level(motor_in2_gpio[motor_id], 0);
+        gpio_set_level(motor_in1_gpio[group_id], 0);
+        gpio_set_level(motor_in2_gpio[group_id], 0);
     }
 }
 
-static esp_err_t set_pwm(uint8_t motor_id, uint32_t duty) {
-    esp_err_t err = ledc_set_duty(MOTOR_SPEED_MODE, motor_ledc_channel[motor_id], duty);
+static esp_err_t set_pwm(uint8_t group_id, uint32_t duty) {
+    esp_err_t err = ledc_set_duty(MOTOR_SPEED_MODE, motor_ledc_channel[group_id], duty);
     if (err != ESP_OK) {
         return err;
     }
-    return ledc_update_duty(MOTOR_SPEED_MODE, motor_ledc_channel[motor_id]);
+    return ledc_update_duty(MOTOR_SPEED_MODE, motor_ledc_channel[group_id]);
 }
 
 esp_err_t motors_init(void) {
@@ -112,7 +119,7 @@ esp_err_t motors_init(void) {
 
     ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
-    for (int i = 0; i < MOTORS_COUNT; ++i) {
+    for (int i = 0; i < MOTOR_GROUP_COUNT; ++i) {
         ESP_ERROR_CHECK(configure_gpio_output(motor_in1_gpio[i]));
         ESP_ERROR_CHECK(configure_gpio_output(motor_in2_gpio[i]));
 
@@ -148,10 +155,10 @@ void motors_stop_all(void) {
         return;
     }
 
-    for (int i = 0; i < MOTORS_COUNT; ++i) {
+    for (int i = 0; i < MOTOR_GROUP_COUNT; ++i) {
         set_direction(i, 0);
         set_pwm(i, 0);
-        current_motor_speed[i] = 0;  // รีเซ็ต state
+        current_group_speed[i] = 0;  // รีเซ็ต state
     }
 }
 
@@ -163,6 +170,8 @@ esp_err_t motors_set_speed(uint8_t motor_id, int16_t speed) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    uint8_t group_id = motor_group_map[motor_id];
+
     // จำกัดค่าความเร็ว
     if (speed > MOTORS_MAX_DUTY) {
         speed = MOTORS_MAX_DUTY;
@@ -172,7 +181,7 @@ esp_err_t motors_set_speed(uint8_t motor_id, int16_t speed) {
 
 #if SOFT_START_ENABLED
     // Soft-start: ค่อยๆ ramp จาก current speed ไป target speed
-    int16_t current = current_motor_speed[motor_id];
+    int16_t current = current_group_speed[group_id];
     int16_t target = speed;
     
     // ถ้า target เป็น 0 (หยุด) ให้ ramp ลงเร็วกว่าปกติ
@@ -192,9 +201,9 @@ esp_err_t motors_set_speed(uint8_t motor_id, int16_t speed) {
         }
         
         // อัพเดต direction และ PWM
-        set_direction(motor_id, current);
+        set_direction(group_id, current);
         uint32_t duty = (current < 0) ? (uint32_t)(-current) : (uint32_t)(current);
-        set_pwm(motor_id, duty);
+        set_pwm(group_id, duty);
         
         // ดีเลย์เล็กน้อยก่อน step ถัดไป (ลด inrush current)
         if (current != target) {
@@ -202,14 +211,14 @@ esp_err_t motors_set_speed(uint8_t motor_id, int16_t speed) {
         }
     }
     
-    current_motor_speed[motor_id] = target;
+    current_group_speed[group_id] = target;
     return ESP_OK;
     
 #else
     // โหมดปกติ (ไม่มี soft-start)
-    set_direction(motor_id, speed);
+    set_direction(group_id, speed);
     uint32_t duty = (speed < 0) ? (uint32_t)(-speed) : (uint32_t)(speed);
-    current_motor_speed[motor_id] = speed;
-    return set_pwm(motor_id, duty);
+    current_group_speed[group_id] = speed;
+    return set_pwm(group_id, duty);
 #endif
 }
