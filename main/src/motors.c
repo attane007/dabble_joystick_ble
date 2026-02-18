@@ -4,6 +4,8 @@
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "MOTORS";
 
@@ -13,6 +15,11 @@ static const char *TAG = "MOTORS";
 #define MOTOR_TIMER LEDC_TIMER_0
 
 #define MOTOR_STBY_GPIO 7 // พิน STBY สำหรับ TB6612FNG ทั้ง 2 ตัว (ใช้ร่วมกัน)
+
+// Soft-start configuration
+#define SOFT_START_ENABLED 1        // เปิด/ปิด soft-start (1=เปิด, 0=ปิด)
+#define RAMP_STEP_SIZE 50           // ขั้นของการเพิ่ม duty แต่ละครั้ง (ยิ่งเล็กยิ่งนุ่ม)
+#define RAMP_DELAY_MS 3             // ดีเลย์ระหว่าง step (ms) - ปรับตามความเร็วที่ต้องการ
 
 static const int motor_pwm_gpio[MOTORS_COUNT] = {
     4, // Motor 0 PWM pin (TB6612 #1 ซ้าย - PWMA/B ร่วมกัน)
@@ -41,6 +48,9 @@ static const ledc_channel_t motor_ledc_channel[MOTORS_COUNT] = {
     LEDC_CHANNEL_2,
     LEDC_CHANNEL_3
 };
+
+// เก็บ duty ปัจจุบันของแต่ละมอเตอร์สำหรับ soft-start
+static int16_t current_motor_speed[MOTORS_COUNT] = {0, 0, 0, 0};
 
 static bool motors_ready = false;
 
@@ -141,6 +151,7 @@ void motors_stop_all(void) {
     for (int i = 0; i < MOTORS_COUNT; ++i) {
         set_direction(i, 0);
         set_pwm(i, 0);
+        current_motor_speed[i] = 0;  // รีเซ็ต state
     }
 }
 
@@ -152,13 +163,53 @@ esp_err_t motors_set_speed(uint8_t motor_id, int16_t speed) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    // จำกัดค่าความเร็ว
     if (speed > MOTORS_MAX_DUTY) {
         speed = MOTORS_MAX_DUTY;
     } else if (speed < -MOTORS_MAX_DUTY) {
         speed = -MOTORS_MAX_DUTY;
     }
 
+#if SOFT_START_ENABLED
+    // Soft-start: ค่อยๆ ramp จาก current speed ไป target speed
+    int16_t current = current_motor_speed[motor_id];
+    int16_t target = speed;
+    
+    // ถ้า target เป็น 0 (หยุด) ให้ ramp ลงเร็วกว่าปกติ
+    int16_t step = (target == 0) ? (RAMP_STEP_SIZE * 2) : RAMP_STEP_SIZE;
+    
+    while (current != target) {
+        if (current < target) {
+            current += step;
+            if (current > target) {
+                current = target;
+            }
+        } else {
+            current -= step;
+            if (current < target) {
+                current = target;
+            }
+        }
+        
+        // อัพเดต direction และ PWM
+        set_direction(motor_id, current);
+        uint32_t duty = (current < 0) ? (uint32_t)(-current) : (uint32_t)(current);
+        set_pwm(motor_id, duty);
+        
+        // ดีเลย์เล็กน้อยก่อน step ถัดไป (ลด inrush current)
+        if (current != target) {
+            vTaskDelay(pdMS_TO_TICKS(RAMP_DELAY_MS));
+        }
+    }
+    
+    current_motor_speed[motor_id] = target;
+    return ESP_OK;
+    
+#else
+    // โหมดปกติ (ไม่มี soft-start)
     set_direction(motor_id, speed);
     uint32_t duty = (speed < 0) ? (uint32_t)(-speed) : (uint32_t)(speed);
+    current_motor_speed[motor_id] = speed;
     return set_pwm(motor_id, duty);
+#endif
 }
